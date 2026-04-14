@@ -1,0 +1,85 @@
+name: AKS Pod Monitor
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Every 5 minutes
+  workflow_dispatch:
+    inputs:
+      context:
+        description: 'Kubernetes Context'
+        required: true
+        default: 'prod-cluster'
+      namespace:
+        description: 'Namespace'
+        required: true
+        default: 'production'
+      action:
+        description: 'Action'
+        required: false
+        default: 'pods'
+        type: choice
+        options:
+          - pods
+          - troubleshoot
+          - secrets
+          - monitor
+          - all
+      pod_name:
+        description: 'Pod Name (for troubleshoot)'
+        required: false
+
+jobs:
+  aks-monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Azure CLI
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          az --version
+
+      - name: Setup kubectl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y kubectl jq
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Setup kubeconfig
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          echo "$KUBE_CONFIG" | base64 -d > kubeconfig
+          export KUBECONFIG=$PWD/kubeconfig
+          kubectl config get-contexts
+          kubectl get nodes
+
+      - name: Run AKS Agent
+        env:
+          KUBECONFIG: ${{ secrets.KUBE_CONFIG }}
+          CONTEXT: ${{ github.event.inputs.context || 'prod-cluster' }}
+          NAMESPACE: ${{ github.event.inputs.namespace || 'production' }}
+          ACTION: ${{ github.event.inputs.action || 'pods' }}
+          POD_NAME: ${{ github.event.inputs.pod_name || '' }}
+        run: |
+          chmod +x aks-agent-multi.sh
+          ./aks-agent-multi.sh -ctx "$CONTEXT" -ns "$NAMESPACE" -a "$ACTION" -p "$POD_NAME"
+
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aks-logs-${{ github.run_number }}
+          path: aks-*.log 2>/dev/null || true
+          retention-days: 7
+
+      - name: Azure Logout
+        if: always()
+        run: az logout

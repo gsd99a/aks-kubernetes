@@ -1,0 +1,106 @@
+name: AKS Cluster Health
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'  # Every 10 minutes
+  workflow_dispatch:
+    inputs:
+      context:
+        description: 'Kubernetes Context'
+        required: true
+        default: 'prod-cluster'
+
+jobs:
+  cluster-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Azure CLI
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+      - name: Setup kubectl
+        run: |
+          sudo apt-get update && sudo apt-get install -y kubectl jq
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Setup kubeconfig
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          echo "$KUBE_CONFIG" | base64 -d > kubeconfig
+          export KUBECONFIG=$PWD/kubeconfig
+          kubectl config use-context ${{ github.event.inputs.context || 'prod-cluster' }}
+
+      - name: Check Cluster Health
+        env:
+          KUBECONFIG: ${{ secrets.KUBE_CONFIG }}
+          CONTEXT: ${{ github.event.inputs.context || 'prod-cluster' }}
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig
+          
+          echo "=== Cluster Health Report ==="
+          echo "Context: $CONTEXT"
+          echo "Time: $(date)"
+          echo ""
+          
+          echo "=== Nodes ==="
+          kubectl get nodes -o wide
+          kubectl top nodes
+          echo ""
+          
+          echo "=== Failed Pods ==="
+          kubectl get pods --all-namespaces --field-selector=status.phase!=Running
+          echo ""
+          
+          echo "=== CrashLoopBackOff ==="
+          kubectl get pods --all-namespaces | grep -i crash || echo "No CrashLoopBackOff pods"
+          echo ""
+          
+          echo "=== OOMKilled Check ==="
+          kubectl get pods --all-namespaces -o json | jq -r '.items[] | select(.status.containerStatuses[]?.lastState.terminated.reason == "OOMKilled") | "\(.metadata.namespace)/\(.metadata.name)"' || echo "No OOMKilled"
+          echo ""
+          
+          echo "=== Recent Events ==="
+          kubectl get events --all-namespaces --sort-by='.lastTimestamp' | tail -20
+
+      - name: Check Alert Conditions
+        env:
+          KUBECONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig
+          
+          # Count issues
+          FAILED_PODS=$(kubectl get pods --all-namespaces --field-selector=status.phase!=Running 2>/dev/null | wc -l)
+          CRASH_LOOPS=$(kubectl get pods --all-namespaces 2>/dev/null | grep -c CrashLoopBackOff || echo 0)
+          
+          echo ""
+          echo "=== ALERT SUMMARY ==="
+          echo "Failed Pods: $FAILED_PODS"
+          echo "CrashLoopBackOff: $CRASH_LOOPS"
+          
+          if [ "$FAILED_PODS" -gt 1 ] || [ "$CRASH_LOOPS" -gt 0 ]; then
+            echo "::warning::Cluster has issues that need attention"
+          fi
+
+      - name: Upload Health Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cluster-health-${{ github.run_number }}
+          path: |
+            cluster-health-*.log
+            health-*.txt
+          retention-days: 7
+
+      - name: Azure Logout
+        if: always()
+        run: az logout

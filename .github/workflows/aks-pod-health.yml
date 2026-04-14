@@ -1,0 +1,92 @@
+name: AKS Pod Health Check
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      context:
+        description: 'Context'
+        required: true
+      namespaces:
+        description: 'Namespaces (comma-separated)'
+        required: false
+        default: 'default,production,staging,dev'
+
+jobs:
+  pod-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          sudo apt-get update && sudo apt-get install -y kubectl jq
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Setup kubeconfig
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          echo "$KUBE_CONFIG" | base64 -d > kubeconfig
+
+      - name: Check Pod Health
+        env:
+          KUBECONFIG: ${{ secrets.KUBE_CONFIG }}
+          CONTEXT: ${{ github.event.inputs.context }}
+          NAMESPACES: ${{ github.event.inputs.namespaces || 'default,production,staging,dev' }}
+        run: |
+          IFS=',' read -ra NS_ARRAY <<< "$NAMESPACES"
+          
+          echo "=== Pod Health Report ==="
+          echo "Time: $(date -u)"
+          echo "Context: $CONTEXT"
+          echo ""
+          
+          for NS in "${NS_ARRAY[@]}"; do
+            NS=$(echo "$NS" | xargs)  # trim whitespace
+            echo "--- Namespace: $NS ---"
+            
+            kubectl get pods -n "$NS" 2>/dev/null | head -20
+            
+            CRASHED=$(kubectl get pods -n "$NS" --field-selector=status.phase!=Running 2>/dev/null | tail -n +2 | wc -l)
+            RESTARTING=$(kubectl get pods -n "$NS" -o jsonpath='{.items[*].status.containerStatuses[*].restartCount}' 2>/dev/null | tr ' ' '\n' | awk '$1>5' | wc -l)
+            
+            if [ "$CRASHED" -gt 0 ]; then
+              echo "⚠️  FAILED PODS: $CRASHED"
+            fi
+            if [ "$RESTARTING" -gt 0 ]; then
+              echo "⚠️  HIGH RESTART PODS: $RESTARTING"
+            fi
+            echo ""
+          done
+
+      - name: Alert on Issues
+        env:
+          KUBECONFIG: ${{ secrets.KUBE_CONFIG }}
+          CONTEXT: ${{ github.event.inputs.context }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          FAILED=$(kubectl get pods --all-namespaces --field-selector=status.phase!=Running 2>/dev/null | tail -n +2 | wc -l)
+          
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::warning::Found $FAILED failed pods in $CONTEXT"
+            
+            if [ -n "$SLACK_WEBHOOK" ]; then
+              curl -X POST "$SLACK_WEBHOOK" \
+                -H 'Content-Type: application/json' \
+                -d "{\"text\":\"⚠️ AKS Alert ($CONTEXT): $FAILED failed pods detected\"}"
+            fi
+          fi
+
+      - name: Azure Logout
+        if: always()
+        run: az logout

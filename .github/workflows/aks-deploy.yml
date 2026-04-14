@@ -1,0 +1,81 @@
+name: AKS Multi-Context Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      context:
+        description: 'Kubernetes Context'
+        required: true
+      namespace:
+        description: 'Namespace'
+        required: true
+        default: 'default'
+      command:
+        description: 'Command to Run'
+        required: true
+        type: choice
+        options:
+          - pods
+          - all
+          - monitor
+          - secrets
+          - troubleshoot
+          - thread-dump
+          - heap-dump
+
+jobs:
+  aks-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Azure CLI
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          az extension add --name aks-preview 2>/dev/null || true
+
+      - name: Setup kubectl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y kubectl jq
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get AKS Credentials
+        env:
+          CLUSTER_NAME: ${{ github.event.inputs.context }}
+          RESOURCE_GROUP: ${{ secrets.RESOURCE_GROUP }}
+        run: |
+          if [ -n "$RESOURCE_GROUP" ]; then
+            az aks get-credentials --resource-group "$RESOURCE_GROUP" --name "$CLUSTER_NAME" --overwrite-existing
+          fi
+
+      - name: Setup kubeconfig
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          if [ -n "$KUBE_CONFIG" ]; then
+            echo "$KUBE_CONFIG" | base64 -d > kubeconfig
+            export KUBECONFIG=$PWD/kubeconfig
+          fi
+          kubectl config get-contexts
+
+      - name: Run Command
+        env:
+          KUBECONFIG: ${{ secrets.KUBE_CONFIG }}
+          CONTEXT: ${{ github.event.inputs.context }}
+          NAMESPACE: ${{ github.event.inputs.namespace }}
+          COMMAND: ${{ github.event.inputs.command }}
+        run: |
+          chmod +x aks-agent-multi.sh
+          ./aks-agent-multi.sh -ctx "$CONTEXT" -ns "$NAMESPACE" -a "$COMMAND"
+
+      - name: Azure Logout
+        if: always()
+        run: az logout

@@ -1,0 +1,206 @@
+# AKS Kubernetes Agent Skill
+
+## Skill Metadata
+- **Name**: aks-kubernetes-agent
+- **Description**: Specialized agent for Kubernetes/AKS operations on Ubuntu - pods, debugging, monitoring, secrets, and Azure KeyVault
+- **Agent Type**: kubernetes-aks
+
+## Trigger Phrases
+- "get pods in namespace"
+- "check pods"
+- "debug pod"
+- "pod logs"
+- "describe pod"
+- "kubernetes resources"
+- "aks cluster"
+- "azure keyvault"
+- "check secrets"
+- "monitor kubernetes"
+- "namespace resources"
+- "search secret"
+- "where is secret used"
+- "find secret string"
+- "track secret usage"
+- "secret in keyvault"
+- "troubleshoot pod"
+- "crashed pod"
+- "restarting pod"
+- "previous logs"
+- "pod crash"
+- "container restart"
+- "debug previous container"
+- "check crashed pod"
+- "pod OOMKilled"
+- "evicted pod"
+- "thread dump"
+- "heap dump"
+- "memory dump"
+- "core dump"
+- "generate thread dump"
+- "generate heap dump"
+- "java diagnostics"
+- "analyze thread dump"
+- "find deadlock"
+
+## Parameters
+- `namespace` (required): Kubernetes namespace to operate on
+- `keyvault_name` (optional): Azure KeyVault name for secret operations
+- `search_string` (required): Secret string/pattern to search for
+
+## Tasks
+
+### Task 1: Get Pods in Namespace
+**Description**: Fetch all pods, their status, and events in a given namespace
+**Commands**:
+```bash
+kubectl get pods -n {namespace}
+kubectl get events -n {namespace} --sort-by='.lastTimestamp'
+kubectl get pods -n {namespace} -o wide
+```
+
+### Task 2: Debug Pod/Container Issues
+**Description**: Debug running pods - check logs, describe, exec
+**Commands**:
+```bash
+# Get pod details
+kubectl describe pod {pod_name} -n {namespace}
+
+# Get logs
+kubectl logs {pod_name} -n {namespace}
+kubectl logs {pod_name} -n {namespace} --previous
+kubectl logs {pod_name} -c {container} -n {namespace}
+
+# Execute into container
+kubectl exec -it {pod_name} -n {namespace} -c {container} -- /bin/bash
+```
+
+### Task 3: Monitor Resources
+**Description**: Check deployments, services, replicaSets, resource usage
+**Commands**:
+```bash
+kubectl get deployments,svc,rs -n {namespace}
+kubectl get all -n {namespace}
+kubectl top pods -n {namespace}
+kubectl top nodes
+kubectl get events -n {namespace} --sort-by='.lastTimestamp'
+```
+
+### Task 4: Check Secrets
+**Description**: List and inspect secrets in namespace
+**Commands**:
+```bash
+kubectl get secrets -n {namespace}
+kubectl describe secret {secret_name} -n {namespace}
+kubectl get secret {secret_name} -n {namespace} -o jsonpath='{.data}' | jq -r 'to_entries[] | "\(.key): \(.value | @base64d)"'
+```
+
+### Task 5: Azure KeyVault Operations
+**Description**: Check Azure KeyVault secrets, certificates, keys
+**Commands**:
+```bash
+az keyvault secret list --vault-name {keyvault_name}
+az keyvault certificate list --vault-name {keyvault_name}
+az keyvault key list --vault-name {keyvault_name}
+az keyvault secret show --name {secret_name} --vault-name {keyvault_name}
+```
+
+### Task 6: Search Secret String Across All Resources
+**Description**: Search for a secret string in all Kubernetes resources AND Azure KeyVault to find where it's used
+**Commands**:
+```bash
+# Complete report script
+SEARCH_STRING="{search_string}"
+KV_NAME="{keyvault_name}"
+NAMESPACE="{namespace}"
+
+echo "=== SECRET USAGE REPORT: $SEARCH_STRING ==="
+echo "[1] KUBERNETES SECRETS"
+kubectl get secrets -n $NAMESPACE -o json | jq -r --arg s "$SEARCH_STRING" '.items[] | select(.data | tojson | @base64d | contains($s)) | .metadata.name'
+
+echo "[2] KUBERNETES CONFIGMAPS"
+kubectl get configmap -n $NAMESPACE -o json | jq -r --arg s "$SEARCH_STRING" '.items[] | select(.data | tojson | contains($s)) | .metadata.name'
+
+echo "[3] WORKLOADS (Deployments/Pods)"
+kubectl get deployment,statefulset,daemonset,pod -n $NAMESPACE -o json | jq -r --arg s "$SEARCH_STRING" '.items[] | select(.spec | tojson | contains($s)) | {type: .kind, name: .metadata.name}'
+
+echo "[4] AZURE KEYVAULT - $KV_NAME"
+az keyvault secret list --vault-name $KV_NAME --output json | jq -r --arg s "$SEARCH_STRING" '.[] | select(.id | test($s; "i")) | "SECRET: \(.id)"'
+az keyvault certificate list --vault-name $KV_NAME --output json | jq -r --arg s "$SEARCH_STRING" '.[] | select(.id | test($s; "i")) | "CERT: \(.id)"'
+az keyvault key list --vault-name $KV_NAME --output json | jq -r --arg s "$SEARCH_STRING" '.[] | select(.kid | test($s; "i")) | "KEY: \(.kid)"'
+```
+
+### Task 7: Troubleshoot Crashed/Restarting Pods
+**Description**: Check previous container state, logs, exit codes, and diagnose issues for crashed pods
+**Commands**:
+```bash
+# Get all pods with restart count
+kubectl get pods -n {namespace} -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.containerStatuses[*].restartCount}{"\n"}{end}'
+
+# Full pod description
+kubectl describe pod {pod_name} -n {namespace}
+
+# Check restart count
+kubectl get pod {pod_name} -n {namespace} -o jsonpath='{.status.containerStatuses[*].restartCount}'
+
+# Last termination message
+kubectl get pod {pod_name} -n {namespace} -o jsonpath='{.status.containerStatuses[*].lastState.terminated.message}'
+
+# Exit code from previous termination
+kubectl get pod {pod_name} -n {namespace} -o jsonpath='{.status.containerStatuses[*].lastState.terminated.exitCode}'
+
+# Check for OOMKilled
+kubectl get pod {pod_name} -n {namespace} -o json | jq '.status.containerStatuses[] | select(.lastState.terminated.reason == "OOMKilled")'
+
+# Previous container logs
+kubectl logs {pod_name} -n {namespace} --previous
+kubectl logs {pod_name} -c {container} -n {namespace} --previous
+
+# Events related to pod
+kubectl get events -n {namespace} --field-selector involvedObject.name={pod_name} --sort-by='.lastTimestamp'
+
+# Container states JSON
+kubectl get pod {pod_name} -n {namespace} -o json | jq '.status.containerStatuses[] | {name: .name, restartCount: .restartCount, state: .state, lastState: .lastState}'
+```
+
+### Task 8: Thread Dump and Heap/Memory Dump
+**Description**: Generate thread dumps and heap dumps for Java/process diagnostics
+**Commands**:
+```bash
+# Get Java PID first
+kubectl exec {pod_name} -n {namespace} -c {container} -- jps -l
+
+# Thread dump with jstack
+kubectl exec {pod_name} -n {namespace} -c {container} -- jstack -l {java_pid}
+
+# Full thread dump with native frames
+kubectl exec {pod_name} -n {namespace} -c {container} -- jstack -m {java_pid}
+
+# Multiple thread dumps (3 dumps)
+for i in 1 2 3; do
+  kubectl exec {pod_name} -n {namespace} -c {container} -- jstack {java_pid} >> /tmp/threaddump-$i.log
+  [ $i -lt 3 ] && kubectl exec {pod_name} -n {namespace} -c {container} -- sleep 5
+done
+
+# Heap dump with jmap
+kubectl exec {pod_name} -n {namespace} -c {container} -- jmap -dump:format=b,file=/tmp/heapdump.hprof {java_pid}
+
+# Copy dumps from pod
+kubectl cp {namespace}/{pod_name}:/tmp/threaddump-*.log ./
+kubectl cp {namespace}/{pod_name}:/tmp/heapdump.hprof ./
+
+# Heap histogram
+kubectl exec {pod_name} -n {namespace} -c {container} -- jmap -histo {java_pid}
+
+# Heap info
+kubectl exec {pod_name} -n {namespace} -c {container} -- jmap -heap {java_pid}
+```
+
+## Response Format
+- Clear section headers for each command output
+- Summary of findings
+- Actionable suggestions if issues found
+
+## Error Handling
+- If namespace not found: suggest `kubectl get namespaces`
+- If auth issues: suggest `az login` and `kubectl config current-context`
+- If permission denied: check RBAC bindings

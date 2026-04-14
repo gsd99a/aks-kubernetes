@@ -1,0 +1,78 @@
+name: AKS Diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      context:
+        description: 'Kubernetes Context'
+        required: true
+      namespace:
+        description: 'Namespace'
+        required: true
+      pod_name:
+        description: 'Pod Name'
+        required: true
+      action:
+        description: 'Action'
+        type: choice
+        required: true
+        options:
+          - troubleshoot
+          - thread-dump
+          - heap-dump
+          - logs
+          - details
+
+jobs:
+  aks-diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Azure CLI
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+      - name: Setup kubectl
+        run: |
+          sudo apt-get update && sudo apt-get install -y kubectl jq openjdk-17-jdk-headless
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Setup kubeconfig
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          echo "$KUBE_CONFIG" | base64 -d > kubeconfig
+
+      - name: Run Diagnostics
+        env:
+          KUBECONFIG: ${{ secrets.KUBE_CONFIG }}
+          CONTEXT: ${{ github.event.inputs.context }}
+          NAMESPACE: ${{ github.event.inputs.namespace }}
+          POD_NAME: ${{ github.event.inputs.pod_name }}
+          ACTION: ${{ github.event.inputs.action }}
+        run: |
+          chmod +x aks-agent-multi.sh
+          ./aks-agent-multi.sh -ctx "$CONTEXT" -ns "$NAMESPACE" -p "$POD_NAME" -a "$ACTION"
+
+      - name: Upload Diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aks-diagnostics-${{ github.run_number }}
+          path: |
+            *.log
+            *.hprof
+            heapdump-*.hprof
+          retention-days: 7
+
+      - name: Azure Logout
+        if: always()
+        run: az logout

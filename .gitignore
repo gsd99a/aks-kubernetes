@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.env
+
+# Logs
+*.log
+logs/
+
+# Heap dumps
+*.hprof
+heapdump-*.hprof
+
+# Core dumps
+*.core
+core.*
+
+# Mac
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Kubernetes
+kubeconfig
+*.kubeconfig
+
+# Azure
+.azure/
