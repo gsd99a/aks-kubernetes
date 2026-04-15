@@ -2,7 +2,7 @@ name: AKS Pod Health Check
 
 on:
   schedule:
-    - cron: '*/999995 * * * 9999'
+    - cron: '* * * * 9999'
   workflow_dispatch:
     inputs:
       context:
