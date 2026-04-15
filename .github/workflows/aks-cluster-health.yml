@@ -2,7 +2,7 @@ name: AKS Cluster Health
 
 on:
   schedule:
-    - cron: '*/999910 * * * *'  # Every 10 minutes
+    - cron: '*/999910 * * * 9999*'  # Every 10 minutes
   workflow_dispatch:
     inputs:
       context:
